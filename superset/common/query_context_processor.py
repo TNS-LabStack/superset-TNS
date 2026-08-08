@@ -309,6 +309,13 @@ class QueryContextProcessor:
             "label_map": label_map,
             "warning": warning,
         }
+        if query_model is not None:
+            # expose client id so callers (and ultimately the frontend) can stop queries
+            # client_id matches how SQL Lab identifies a query client-side
+            payload["client_id"] = query_model.client_id
+            # keep backwards compatibility with frontend that expects `query_id`
+            payload["query_id"] = query_model.client_id
+
         timing = QueryAcquisitionTiming(
             query_planning_ns=query_planning_ns,
             cache_resolution_ns=cache_resolution_ns,
@@ -318,15 +325,6 @@ class QueryContextProcessor:
             ),
         )
         return QueryAcquisitionResult(payload=payload, timing=timing)
-
-        # expose client id so callers (and ultimately the frontend) can stop queries
-        if query_model is not None:
-            # client_id matches how SQL Lab identifies a query client-side
-            payload["client_id"] = query_model.client_id
-            # keep backwards compatibility with frontend that expects `query_id`
-            payload["query_id"] = query_model.client_id
-
-        return payload
 
     def query_cache_key(self, query_obj: QueryObject, **kwargs: Any) -> str | None:
         """

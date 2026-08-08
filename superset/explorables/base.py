@@ -27,11 +27,10 @@ from collections.abc import Hashable
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING, TypedDict
 
-from superset.migrations.shared.catalogs import Query
-
 if TYPE_CHECKING:
     from superset.common.query_object import QueryObject
     from superset.models.helpers import QueryResult
+    from superset.models.sql_lab import Query
     from superset.superset_typing import ExplorableData, QueryObjectDict
 
 
