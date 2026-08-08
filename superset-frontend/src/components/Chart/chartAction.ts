@@ -37,8 +37,6 @@ import type { ControlStateMapping } from '@superset-ui/chart-controls';
 import { getControlsState } from 'src/explore/store';
 import {
   getAnnotationJsonUrl,
-  getExploreUrl,
-  getLegacyEndpointType,
   buildV1ChartDataPayload,
   getQuerySettings,
   getChartDataUri,
@@ -278,7 +276,6 @@ export interface GetChartDataRequestParams {
   resultFormat?: string;
   resultType?: string;
   force?: boolean;
-  method?: 'GET' | 'POST';
   requestParams?: RequestParams;
   ownState?: JsonObject;
   clientId?: string;
@@ -411,51 +408,6 @@ export const dynamicPluginControlsReady =
     });
   };
 
-const legacyChartDataRequest = async (
-  formData: QueryFormData | LatestQueryFormData,
-  resultFormat: string,
-  resultType: string,
-  force: boolean,
-  method: 'GET' | 'POST' = 'POST',
-  requestParams: RequestParams = {},
-  parseMethod?: string,
-): Promise<ChartDataRequestResponse> => {
-  const endpointType = getLegacyEndpointType({ resultFormat, resultType });
-  const allowDomainSharding = Boolean(
-    // eslint-disable-next-line camelcase
-    domainShardingEnabled && requestParams?.dashboard_id,
-  );
-  const url = getExploreUrl({
-    formData: formData as QueryFormData & {
-      label_colors?: Record<string, string>;
-    },
-    endpointType,
-    force,
-    allowDomainSharding,
-    method,
-    requestParams: requestParams.dashboard_id
-      ? { dashboard_id: String(requestParams.dashboard_id) }
-      : {},
-  });
-  const querySettings: QuerySettings = {
-    ...requestParams,
-    url: url ?? undefined,
-    postPayload: { form_data: formData },
-    parseMethod,
-  };
-
-  return SupersetClient.post(
-    querySettings as Parameters<typeof SupersetClient.post>[0],
-  ).then(({ json, response }: { json: JsonObject; response: Response }) =>
-    // Make the legacy endpoint return a payload that corresponds to the
-    // V1 chart data endpoint response signature.
-    ({
-      response,
-      json: { result: [json] },
-    }),
-  );
-};
-
 const v1ChartDataRequest = async (
   formData: QueryFormData | LatestQueryFormData,
   resultFormat: string,
@@ -515,7 +467,6 @@ export async function getChartDataRequest({
   resultFormat = 'json',
   resultType = 'full',
   force = false,
-  method = 'POST' as const,
   requestParams = {},
   ownState = {},
   clientId = undefined,
@@ -531,18 +482,7 @@ export async function getChartDataRequest({
       credentials: 'include',
     };
   }
-  const [useLegacyApi, parseMethod] = getQuerySettings(formData);
-  if (useLegacyApi) {
-    return legacyChartDataRequest(
-      formData,
-      resultFormat,
-      resultType,
-      force,
-      method,
-      querySettings,
-      parseMethod,
-    );
-  }
+  const [parseMethod] = getQuerySettings(formData);
   return v1ChartDataRequest(
     formData,
     resultFormat,
@@ -708,7 +648,6 @@ export function addChart(
 export function handleChartDataResponse(
   response: Response,
   json: { result: QueryData[] },
-  useLegacyApi?: boolean,
   signal?: AbortSignal,
 ): Promise<QueryData[]> | QueryData[] {
   // TODO: Add handling for chart view responses in future implementation
@@ -726,12 +665,6 @@ export function handleChartDataResponse(
         // which differs from QueryData. We cast through unknown to handle this safely.
         // The optional signal lets a caller abort the wait (Stop pressed, chart
         // superseded or unmounted), cancelling the job and avoiding leaked listeners.
-        if (useLegacyApi) {
-          return waitForAsyncData(
-            result[0] as unknown as Parameters<typeof waitForAsyncData>[0],
-            signal,
-          ) as Promise<QueryData[]>;
-        }
         return waitForAsyncData(
           result as unknown as Parameters<typeof waitForAsyncData>[0],
           signal,
@@ -797,21 +730,14 @@ export function exploreJSON(
       resultFormat: 'json',
       resultType: 'full',
       force,
-      method: 'POST',
       requestParams,
       ownState,
       clientId,
     });
 
-    const [useLegacyApi] = getQuerySettings(formData);
     const chartDataRequestCaught = chartDataRequest
       .then(({ response, json }) =>
-        handleChartDataResponse(
-          response,
-          json,
-          useLegacyApi,
-          controller.signal,
-        ),
+        handleChartDataResponse(response, json, controller.signal),
       )
       .then(queriesResponse => {
         // Drop stale responses: if this request was aborted (Stop, or a newer
@@ -965,28 +891,10 @@ export function exploreJSON(
         },
       );
 
-    // only retrieve annotations when calling the legacy API
-    const annotationLayers: AnnotationLayer[] = useLegacyApi
-      ? (formData.annotation_layers as AnnotationLayer[]) || []
-      : [];
-    const isDashboardRequest = (dashboardId ?? 0) > 0;
-
     return Promise.all([
       chartDataRequestCaught,
       dispatch(triggerQuery(false, key as string | number)),
       dispatch(updateQueryFormData(formData, key as string | number)),
-      ...annotationLayers.map((annotation: AnnotationLayer) =>
-        dispatch(
-          runAnnotationQuery({
-            annotation,
-            timeout,
-            formData,
-            key,
-            isDashboardRequest,
-            force,
-          }),
-        ),
-      ),
     ]);
   };
 }

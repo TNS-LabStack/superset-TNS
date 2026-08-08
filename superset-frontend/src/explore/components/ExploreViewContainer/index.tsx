@@ -19,6 +19,8 @@
 /* eslint camelcase: 0 */
 import {
   ComponentType,
+  Suspense,
+  lazy,
   memo,
   useCallback,
   useEffect,
@@ -34,6 +36,8 @@ import {
   usePrevious,
   isMatrixifyEnabled,
   SupersetClient,
+  isFeatureEnabled,
+  FeatureFlag,
   QueryFormData,
   JsonObject,
   MatrixifyFormData,
@@ -97,12 +101,22 @@ import {
 } from 'src/explore/types';
 import { Slice } from 'src/types/Chart';
 import { User } from 'src/types/bootstrapTypes';
+import { selectIsChartVersionPreviewActive } from 'src/features/versionHistory/reducer';
 import ExploreChartPanel from '../ExploreChartPanel';
 import ConnectedControlPanelsContainer from '../ControlPanelsContainer';
 import SaveModal from '../SaveModal';
 import DataSourcePanel from '../DatasourcePanel';
 import ConnectedExploreChartHeader from '../ExploreChartHeader';
 import ExploreContainer from '../ExploreContainer';
+
+// Lazy-loaded so deployments with the VersionHistory flag off never pay
+// the bundle cost of the feature's component graph.
+const ExploreVersionHistory = lazy(
+  () => import('src/features/versionHistory/ExploreVersionHistory'),
+);
+const ChartVersionPreview = lazy(
+  () => import('src/features/versionHistory/ChartVersionPreview'),
+);
 
 const ExplorePanelContainer = styled.div`
   ${({ theme }) => css`
@@ -415,6 +429,9 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
   );
   const tabId = useTabId();
   const history = useHistory();
+  const isChartVersionPreviewActive = useSelector(
+    selectIsChartVersionPreviewActive,
+  );
 
   const theme = useTheme();
 
@@ -522,6 +539,9 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
   );
 
   const onQuery = useCallback(() => {
+    if (isChartVersionPreviewActive) {
+      return;
+    }
     props.actions.setForceQuery(false);
 
     // Skip main query if Matrixify is enabled
@@ -546,6 +566,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
     props.actions,
     props.chart.id,
     props.form_data,
+    isChartVersionPreviewActive,
   ]);
 
   const handleKeydown = useCallback(
@@ -762,7 +783,12 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
               (currentTemplate ? ' ' : '') +
               newVariables.join(' ');
 
-            props.actions.setControlValue('tooltip_template', updatedTemplate);
+            props.actions.setControlValue(
+              'tooltip_template',
+              updatedTemplate,
+              undefined,
+              { programmatic: true },
+            );
           }
         }
       }
@@ -775,9 +801,13 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
         );
 
         if (xAxisTitle && currentMargin < 30) {
-          props.actions.setControlValue('x_axis_title_margin', 30);
+          props.actions.setControlValue('x_axis_title_margin', 30, undefined, {
+            programmatic: true,
+          });
         } else if (!xAxisTitle && currentMargin !== 0) {
-          props.actions.setControlValue('x_axis_title_margin', 0);
+          props.actions.setControlValue('x_axis_title_margin', 0, undefined, {
+            programmatic: true,
+          });
         }
       }
 
@@ -788,9 +818,13 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
         );
 
         if (yAxisTitle && currentMargin < 30) {
-          props.actions.setControlValue('y_axis_title_margin', 30);
+          props.actions.setControlValue('y_axis_title_margin', 30, undefined, {
+            programmatic: true,
+          });
         } else if (!yAxisTitle && currentMargin !== 0) {
-          props.actions.setControlValue('y_axis_title_margin', 0);
+          props.actions.setControlValue('y_axis_title_margin', 0, undefined, {
+            programmatic: true,
+          });
         }
       }
 
@@ -1086,15 +1120,32 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
               onClick={toggleCollapse}
             />
           </div>
-          {/* eslint-disable @typescript-eslint/no-explicit-any -- DataSourcePanel uses narrower types that are compatible at runtime */}
-          <DataSourcePanel
-            formData={props.form_data}
-            datasource={props.datasource as any}
-            controls={props.controls as any}
-            actions={props.actions as any}
-            width={width}
-          />
-          {/* eslint-enable @typescript-eslint/no-explicit-any */}
+          <div
+            data-test="explore-datasource-gate"
+            aria-disabled={isChartVersionPreviewActive}
+            css={css`
+              height: 100%;
+              ${
+                isChartVersionPreviewActive
+                  ? `
+                  pointer-events: none;
+                  opacity: 0.5;
+                `
+                  : ''
+              }
+            `}
+            {...(isChartVersionPreviewActive ? { inert: '' } : {})}
+          >
+            {/* eslint-disable @typescript-eslint/no-explicit-any -- DataSourcePanel uses narrower types that are compatible at runtime */}
+            <DataSourcePanel
+              formData={props.form_data}
+              datasource={props.datasource as any}
+              controls={props.controls as any}
+              actions={props.actions as any}
+              width={width}
+            />
+            {/* eslint-enable @typescript-eslint/no-explicit-any */}
+          </div>
         </Resizable>
         {isCollapsed ? (
           <button
@@ -1139,22 +1190,40 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
           enable={{ right: true }}
           className="col-sm-3 explore-column controls-column"
         >
-          <ConnectedControlPanelsContainer
-            exploreState={props.exploreState}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Combined actions type is compatible at runtime
-            actions={props.actions as any}
-            form_data={props.form_data}
-            controls={props.controls}
-            chart={props.chart}
-            datasource_type={props.datasource_type}
-            isDatasourceMetaLoading={props.isDatasourceMetaLoading}
-            onQuery={onQuery}
-            onStop={onStop}
-            canStopQuery={props.can_add || props.can_overwrite}
-            errorMessage={dataTabErrorMessage}
-            buttonErrorMessage={errorMessage}
-            chartIsStale={chartIsStale}
-          />
+          <div
+            data-test="explore-controls-gate"
+            aria-disabled={isChartVersionPreviewActive}
+            css={css`
+              height: 100%;
+              ${
+                isChartVersionPreviewActive
+                  ? `
+                  pointer-events: none;
+                  opacity: 0.5;
+                `
+                  : ''
+              }
+            `}
+            // inert blocks keyboard focus too; React 18 needs the spread form
+            {...(isChartVersionPreviewActive ? { inert: '' } : {})}
+          >
+            <ConnectedControlPanelsContainer
+              exploreState={props.exploreState}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Combined actions type is compatible at runtime
+              actions={props.actions as any}
+              form_data={props.form_data}
+              controls={props.controls}
+              chart={props.chart}
+              datasource_type={props.datasource_type}
+              isDatasourceMetaLoading={props.isDatasourceMetaLoading}
+              onQuery={onQuery}
+              onStop={onStop}
+              canStopQuery={props.can_add || props.can_overwrite}
+              errorMessage={dataTabErrorMessage}
+              buttonErrorMessage={errorMessage}
+              chartIsStale={chartIsStale}
+            />
+          </div>
         </Resizable>
         <div
           className={cx(
@@ -1162,8 +1231,19 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
             isCollapsed ? 'col-sm-9' : 'col-sm-7',
           )}
         >
-          {renderChartContainer()}
+          {isChartVersionPreviewActive ? (
+            <Suspense fallback={null}>
+              <ChartVersionPreview />
+            </Suspense>
+          ) : (
+            renderChartContainer()
+          )}
         </div>
+        {isFeatureEnabled(FeatureFlag.VersionHistory) && (
+          <Suspense fallback={null}>
+            <ExploreVersionHistory />
+          </Suspense>
+        )}
       </ExplorePanelContainer>
       {props.isSaveModalVisible && (
         <SaveModal
